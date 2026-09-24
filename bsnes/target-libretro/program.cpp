@@ -403,7 +403,24 @@ auto Program::videoFrame(const uint16* data, uint pitch, uint width, uint height
 			height -= 16 * multiplier;
 		}
 	}
-	video_cb(data, width, height, pitch);
+
+	// SNES CGRAM and the PPU output use 0BBBBBGGGGGRRRRR. Expand green from
+	// five to six bits and retain the outer-field ordering required by the
+	// frontend's RGB565 upload path. Keep the emulator's buffer untouched.
+	const size_t stride = pitch / sizeof(uint16);
+	static std::vector<uint16_t> converted;
+	converted.resize(stride * height);
+	for (uint y = 0; y < height; ++y) {
+		for (uint x = 0; x < stride; ++x) {
+			const uint16 pixel = data[y * stride + x];
+			const uint16 red = pixel & 0x001f;
+			const uint16 green5 = (pixel >> 5) & 0x001f;
+			const uint16 blue = (pixel >> 10) & 0x001f;
+			const uint16 green6 = (green5 << 1) | (green5 >> 4);
+			converted[y * stride + x] = (blue << 11) | (green6 << 5) | red;
+		}
+	}
+	video_cb(converted.data(), width, height, pitch);
 }
 
 // Double the fun!

@@ -32,6 +32,9 @@ auto CPU::Enter() -> void {
 }
 
 auto CPU::main() -> void {
+#if defined(__LIBRETRO__)
+  libretroExtCpuExecute(r.pc.d);
+#endif
   if(r.wai) return instructionWait();
   if(r.stp) return instructionStop();
   if(!status.interruptPending) return instruction();

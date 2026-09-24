@@ -20,6 +20,11 @@ extern "C" {
 }
 
 namespace SuperFamicom {
+#if defined(__LIBRETRO__)
+  auto libretroExtCpuExecute(uint32_t pc) -> void;
+  auto libretroExtCpuRead(uint32_t pc, uint32_t address, uint8_t value) -> uint8_t;
+  auto libretroExtCpuWrite(uint32_t pc, uint32_t address, uint8_t value) -> void;
+#endif
   #define platform Emulator::platform
   namespace File = Emulator::File;
   using Random = Emulator::Random;

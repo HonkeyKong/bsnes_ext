@@ -38,6 +38,9 @@ auto CPU::read(uint address) -> uint8 {
 
   status.irqLock = 0;
   auto data = bus.read(address, r.mdr);
+#if defined(__LIBRETRO__)
+  data = libretroExtCpuRead(r.pc.d, address, data);
+#endif
   step<4,0>();
   aluEdge();
   //$00-3f,80-bf:4000-43ff reads are internal to CPU, and do not update the MDR
@@ -78,6 +81,9 @@ auto CPU::write(uint address, uint8 data) -> void {
   }
 
   status.irqLock = 0;
+#if defined(__LIBRETRO__)
+  libretroExtCpuWrite(r.pc.d, address, data);
+#endif
   bus.write(address, r.mdr = data);
 }
 

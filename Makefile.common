@@ -30,6 +30,7 @@ SOURCES_C   += $(CORE_DIR)/libco/libco.c \
 
 SOURCES_CXX += \
 					$(BSNES_DIR)/target-libretro/libretro.cpp \
+					$(BSNES_DIR)/target-libretro/libretro_ext.cpp \
 					$(BSNES_DIR)/emulator/emulator.cpp \
 					$(BSNES_DIR)/filter/filter.cpp \
 					$(BSNES_DIR)/lzma/lzma.cpp \

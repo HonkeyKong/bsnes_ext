@@ -1,4 +1,5 @@
 #include <cassert>
+#include <vector>
 #include "libretro.h"
 
 static retro_environment_t environ_cb;
@@ -30,6 +31,7 @@ static void audio_queue(int16_t left, int16_t right)
 }
 
 #include "program.cpp"
+#include "libretro_ext.h"
 
 static string sgb_bios;
 static vector<string> cheatList;
@@ -635,6 +637,7 @@ RETRO_API void retro_run()
 		emulator->run();
 	else
 		run_with_runahead(run_ahead_frames);
+	libretro_ext_frame_complete();
 }
 
 RETRO_API size_t retro_serialize_size()
@@ -683,11 +686,12 @@ RETRO_API void retro_cheat_set(unsigned index, bool enabled, const char *code)
 
 RETRO_API bool retro_load_game(const retro_game_info *game)
 {
-	// bsnes uses 0RGB1555 internally but it is deprecated
-	// let software conversion happen in frontend
-	/*retro_pixel_format fmt = RETRO_PIXEL_FORMAT_0RGB1555;
+	libretro_ext_reset();
+	// Program::videoFrame converts the PPU's native BGR555 output to RGB565,
+	// which is supported directly by OpenGL ES and other libretro frontends.
+	retro_pixel_format fmt = RETRO_PIXEL_FORMAT_RGB565;
 	if (!environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt))
-		return false;*/
+		return false;
 
 	emulator->configure("Audio/Frequency", SAMPLERATE);
 
@@ -739,6 +743,10 @@ RETRO_API bool retro_load_game(const retro_game_info *game)
 RETRO_API bool retro_load_game_special(unsigned game_type,
 		const struct retro_game_info *info, size_t num_info)
 {
+	libretro_ext_reset();
+	retro_pixel_format fmt = RETRO_PIXEL_FORMAT_RGB565;
+	if (!environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt))
+		return false;
 	emulator->configure("Audio/Frequency", SAMPLERATE);
 
 	flush_variables();
@@ -776,6 +784,7 @@ RETRO_API void retro_unload_game()
 {
 	program->save();
 	emulator->unload();
+	libretro_ext_reset();
 }
 
 RETRO_API unsigned retro_get_region()
