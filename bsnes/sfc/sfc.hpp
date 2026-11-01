@@ -28,6 +28,19 @@ namespace SuperFamicom {
   //returns true when the frontend handled the instruction and it must not execute.
   extern bool libretroExtExecTrapsActive;
   auto libretroExtExecTrap(uint32_t pc) -> bool;
+  //BG tile overrides (video only): substitute 8x8 pixel data for the tile referenced by the
+  //tilemap entry at a VRAM word address, while that entry still holds `expect`. Rows are stored
+  //pre-planarized in the PPU's own fetch format (vram[a] | vram[a+8]<<16 | ... ).
+  struct LibretroExtTileOverride { uint16_t expect; uint64_t rows[8]; };
+  extern bool libretroExtTileOverridesActive;
+  extern uint16_t libretroExtTileOverrideIndex[32768];  //0 = none, else slot + 1
+  extern LibretroExtTileOverride libretroExtTileOverrideSlots[];
+  inline auto libretroExtTileOverride(uint32_t mapAddress, uint32_t entry) -> const LibretroExtTileOverride* {
+    const uint16_t slot = libretroExtTileOverrideIndex[mapAddress & 0x7fff];
+    if(!slot) return nullptr;
+    const auto* o = &libretroExtTileOverrideSlots[slot - 1];
+    return o->expect == (uint16_t)entry ? o : nullptr;
+  }
 #endif
   #define platform Emulator::platform
   namespace File = Emulator::File;

@@ -150,6 +150,17 @@ struct libretro_ext_api {
   // Only valid inside a trap callback: performs a real opcode fetch cycle at PC, then executes
   // `opcode` in place of the fetched byte (e.g. the instruction displaced by a WDM patch).
   bool (*cpu_execute_opcode)(const char* cpu_tag, uint8_t opcode);
+  // --- BG tile overrides (tail; gate on sizeof_struct) ---
+  // Video-only substitution of an 8x8 BG tile's pixels, keyed by the VRAM word address of the
+  // tilemap entry that references it. Applies while that entry still equals expected_entry, so it
+  // disappears by itself if the game rewrites the cell. The entry's palette, priority and flip
+  // flags are used as normal; pixels are 64 row-major color indices (0 = transparent), of which
+  // the layer's bit depth (2/4/8 bpp) is honoured. Uses no VRAM and does not affect emulation
+  // or save states; frontends re-establish overrides after loading a state.
+  // bsnes_ext: fast PPU only, 8x8 tiles, non-hires; set returns false when unsupported.
+  bool (*set_bg_tile_override)(uint32_t tilemap_address, uint16_t expected_entry, const uint8_t* pixels64);
+  bool (*clear_bg_tile_override)(uint32_t tilemap_address);
+  void (*clear_bg_tile_overrides)();
 };
 
 LIBRETRO_EXT_EXPORT const libretro_ext_api* libretro_ext_get_api(void);

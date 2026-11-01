@@ -29,6 +29,12 @@ struct PPU : Thread, PPUcounter {
   //serialization.cpp
   auto serialize(serializer&) -> void;
 
+#if defined(__LIBRETRO__)
+  //libretro_ext frontend access (sfc.vram / sfc.cgram regions)
+  auto extVRAM(uint index) -> uint16& { return vram.data[index & 0x7fff]; }
+  auto extCGRAM(uint index) -> uint15& { return screen.cgram[index & 0xff]; }
+#endif
+
 private:
   //ppu.cpp
   alwaysinline auto step() -> void;

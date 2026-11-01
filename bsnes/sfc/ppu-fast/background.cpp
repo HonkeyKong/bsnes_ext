@@ -73,7 +73,13 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
     hoffset &= hmask;
     voffset &= vmask;
 
-    uint tileNumber = getTile(self, hoffset, voffset);
+    uint tileAddress = getTileAddress(self, hoffset, voffset);
+    uint tileNumber = ppu.vram[tileAddress];
+    #if defined(__LIBRETRO__)
+    //frontend tile override (8x8 tiles, non-hires only): replaces the character data fetch
+    const LibretroExtTileOverride* tileOverride = libretroExtTileOverridesActive && tileHeight == 3 && tileWidth == 3
+      ? libretroExtTileOverride(tileAddress, tileNumber) : nullptr;
+    #endif
     uint mirrorY = tileNumber & 0x8000 ? 7 : 0;
     uint mirrorX = tileNumber & 0x4000 ? 7 : 0;
     uint8 tilePriority = self.priority[bool(tileNumber & 0x2000)];
@@ -92,6 +98,9 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
     data |= (uint64)ppu.vram[address +  8] << 16;
     data |= (uint64)ppu.vram[address + 16] << 32;
     data |= (uint64)ppu.vram[address + 24] << 48;
+    #if defined(__LIBRETRO__)
+    if(tileOverride) data = tileOverride->rows[voffset & 7 ^ mirrorY];
+    #endif
 
     for(uint tileX = 0; tileX < 8; tileX++, x++) {
       if(x & width) continue;  //x < 0 || x >= width
@@ -144,6 +153,10 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
 }
 
 auto PPU::Line::getTile(PPU::IO::Background& self, uint hoffset, uint voffset) -> uint {
+  return ppu.vram[getTileAddress(self, hoffset, voffset)];
+}
+
+auto PPU::Line::getTileAddress(PPU::IO::Background& self, uint hoffset, uint voffset) -> uint {
   bool hires = io.bgMode == 5 || io.bgMode == 6;
   uint tileHeight = 3 + self.tileSize;
   uint tileWidth = !hires ? tileHeight : 4;
@@ -154,5 +167,5 @@ auto PPU::Line::getTile(PPU::IO::Background& self, uint hoffset, uint voffset) -
   uint offset = (tileY & 0x1f) << 5 | (tileX & 0x1f);
   if(tileX & 0x20) offset += screenX;
   if(tileY & 0x20) offset += screenY;
-  return ppu.vram[self.screenAddress + offset & 0x7fff];
+  return self.screenAddress + offset & 0x7fff;
 }

@@ -73,6 +73,10 @@ bool regionAt(int index, Region& out) {
   if(select("sfc.rom", SuperFamicom::cartridge.rom.data(), SuperFamicom::cartridge.rom.size(), true)) return true;
   if(select("sfc.ram", SuperFamicom::cartridge.ram.data(), SuperFamicom::cartridge.ram.size(), true)) return true;
   if(select("sfc.wram", SuperFamicom::cpu.wram, sizeof SuperFamicom::cpu.wram, true)) return true;
+  //PPU memories have no flat byte backing (and differ between the fast and accurate PPU), so
+  //they are served by ppuRead/ppuWrite below. data == nullptr marks such a region.
+  if(select("sfc.vram", nullptr, 64 * 1024, true)) return true;
+  if(select("sfc.cgram", nullptr, 512, true)) return true;
   return false;
 }
 bool findRegion(const char* tag, Region& out) {
@@ -83,13 +87,45 @@ bool findRegion(const char* tag, Region& out) {
 int getRegionCount() { Region region{}; int count = 0; while(regionAt(count, region)) count++; return count; }
 const char* getRegionTag(int index) { Region region{}; return regionAt(index, region) ? region.tag : nullptr; }
 uint64_t getRegionSize(const char* tag) { Region region{}; return findRegion(tag, region) ? region.size : 0; }
+//VRAM is 32K little-endian words; CGRAM is 256 15-bit colors stored as little-endian words.
+uint16_t ppuWord(bool vram, uint32_t index) {
+  namespace S = SuperFamicom;
+  if(S::system.fastPPU()) return vram ? S::ppufast.vram[index & 0x7fff] : S::ppufast.cgram[index & 0xff];
+  return vram ? (uint16_t)S::ppu.extVRAM(index) : (uint16_t)S::ppu.extCGRAM(index);
+}
+void ppuSetWord(bool vram, uint32_t index, uint16_t value) {
+  namespace S = SuperFamicom;
+  if(S::system.fastPPU()) {
+    if(vram) S::ppufast.vram[index & 0x7fff] = value; else S::ppufast.cgram[index & 0xff] = value & 0x7fff;
+  } else {
+    if(vram) S::ppu.extVRAM(index) = value; else S::ppu.extCGRAM(index) = value & 0x7fff;
+  }
+}
+uint64_t ppuRead(bool vram, uint64_t offset, uint8_t* out, uint64_t bytes) {
+  for(uint64_t n = 0; n < bytes; n++) out[n] = ppuWord(vram, (offset + n) >> 1) >> ((offset + n) & 1) * 8;
+  return bytes;
+}
+uint64_t ppuWrite(bool vram, uint64_t offset, const uint8_t* in, uint64_t bytes) {
+  //the fast PPU renders scanlines lazily from live VRAM/CGRAM; render any already-latched lines
+  //with the old contents first, exactly as its own $2118/$2122 write handlers do.
+  if(SuperFamicom::system.fastPPU()) SuperFamicom::PPUfast::Line::flush();
+  for(uint64_t n = 0; n < bytes; n++) {
+    const uint32_t index = (offset + n) >> 1; const uint8_t shift = ((offset + n) & 1) * 8;
+    ppuSetWord(vram, index, (ppuWord(vram, index) & ~(0xff << shift)) | in[n] << shift);
+  }
+  return bytes;
+}
 uint64_t readRegion(const char* tag, uint64_t offset, void* destination, uint64_t bytes) {
   Region region{}; if(!destination || !findRegion(tag, region) || offset >= region.size) return 0;
-  bytes = std::min(bytes, region.size - offset); std::memcpy(destination, region.data + offset, bytes); return bytes;
+  bytes = std::min(bytes, region.size - offset);
+  if(!region.data) return ppuRead(!std::strcmp(region.tag, "sfc.vram"), offset, (uint8_t*)destination, bytes);
+  std::memcpy(destination, region.data + offset, bytes); return bytes;
 }
 uint64_t writeRegion(const char* tag, uint64_t offset, const void* source, uint64_t bytes) {
   Region region{}; if(!source || !findRegion(tag, region) || !region.writable || offset >= region.size) return 0;
-  bytes = std::min(bytes, region.size - offset); std::memcpy(region.data + offset, source, bytes); return bytes;
+  bytes = std::min(bytes, region.size - offset);
+  if(!region.data) return ppuWrite(!std::strcmp(region.tag, "sfc.vram"), offset, (const uint8_t*)source, bytes);
+  std::memcpy(region.data + offset, source, bytes); return bytes;
 }
 
 uint64_t getFrameNumber() { return loaded() ? frameNumber : 0; }
@@ -217,6 +253,53 @@ bool cpuExecuteOpcode(const char* tag, uint8_t opcode) {
   SuperFamicom::cpu.executeOpcode(opcode); return true;
 }
 
+// --- BG tile overrides ----------------------------------------------------------------
+constexpr uint32_t MaxTileOverrides = 4096;
+std::vector<uint16_t> freeOverrideSlots;
+uint32_t overrideCount = 0;
+
+void beforeOverrideChange() {
+  //render any scanlines the fast PPU has latched but not drawn yet with the current state
+  if(SuperFamicom::system.fastPPU()) SuperFamicom::PPUfast::Line::flush();
+}
+void resetTileOverrides() {
+  std::memset(SuperFamicom::libretroExtTileOverrideIndex, 0, sizeof SuperFamicom::libretroExtTileOverrideIndex);
+  freeOverrideSlots.clear();
+  for(uint32_t n = MaxTileOverrides; n > 0; n--) freeOverrideSlots.push_back((uint16_t)n);  //slot ids are 1-based
+  overrideCount = 0; SuperFamicom::libretroExtTileOverridesActive = false;
+}
+bool setBgTileOverride(uint32_t address, uint16_t expect, const uint8_t* pixels) {
+  if(!loaded() || !pixels || address > 0x7fff || !SuperFamicom::system.fastPPU()) return false;
+  if(freeOverrideSlots.empty() && !overrideCount) resetTileOverrides();
+  uint16_t& index = SuperFamicom::libretroExtTileOverrideIndex[address];
+  if(!index) { if(freeOverrideSlots.empty()) return false; index = freeOverrideSlots.back(); freeOverrideSlots.pop_back(); overrideCount++; }
+  beforeOverrideChange();
+  auto& o = SuperFamicom::libretroExtTileOverrideSlots[index - 1];
+  o.expect = expect;
+  //planarize each row into the fetch layout: word k holds bitplanes 2k (low byte) and 2k+1 (high byte)
+  for(uint32_t row = 0; row < 8; row++) {
+    uint64_t data = 0;
+    for(uint32_t col = 0; col < 8; col++) {
+      const uint8_t color = pixels[row * 8 + col], bit = 7 - col;
+      for(uint32_t plane = 0; plane < 8; plane++)
+        if(color >> plane & 1) data |= 1ull << ((plane >> 1) * 16 + (plane & 1) * 8 + bit);
+    }
+    o.rows[row] = data;
+  }
+  SuperFamicom::libretroExtTileOverridesActive = true;
+  return true;
+}
+bool clearBgTileOverride(uint32_t address) {
+  if(address > 0x7fff) return false;
+  uint16_t& index = SuperFamicom::libretroExtTileOverrideIndex[address];
+  if(!index) return false;
+  beforeOverrideChange();
+  freeOverrideSlots.push_back(index); index = 0;
+  if(!--overrideCount) SuperFamicom::libretroExtTileOverridesActive = false;
+  return true;
+}
+void clearBgTileOverrides() { if(loaded()) beforeOverrideChange(); resetTileOverrides(); }
+
 const libretro_ext_api extApi = [] {
   libretro_ext_api table{};
   table.abi_version = 5; table.sizeof_struct = sizeof table;
@@ -237,19 +320,24 @@ const libretro_ext_api extApi = [] {
   table.set_exec_trap_callback = setExecTrapCallback; table.add_exec_trap = addExecTrap;
   table.remove_exec_trap = removeExecTrap; table.clear_exec_traps = clearExecTraps;
   table.cpu_execute_opcode = cpuExecuteOpcode;
+  table.set_bg_tile_override = setBgTileOverride; table.clear_bg_tile_override = clearBgTileOverride;
+  table.clear_bg_tile_overrides = clearBgTileOverrides;
   return table;
 }();
 
 }
 
 void libretro_ext_reset() {
-  frameNumber = 0; clearWatchRules(); clearInjectRules(); clearLastWatchHit(); clearExecTraps();
+  frameNumber = 0; clearWatchRules(); clearInjectRules(); clearLastWatchHit(); clearExecTraps(); resetTileOverrides();
   pcHistoryHead = pcHistoryCount = 0; std::memset(pcHistory, 0, sizeof pcHistory);
 }
 void libretro_ext_frame_complete() { if(loaded()) frameNumber++; }
 
 namespace SuperFamicom {
 bool libretroExtExecTrapsActive = false;
+bool libretroExtTileOverridesActive = false;
+uint16_t libretroExtTileOverrideIndex[32768] = {};
+LibretroExtTileOverride libretroExtTileOverrideSlots[MaxTileOverrides] = {};
 auto libretroExtExecTrap(uint32_t pc) -> bool {
   pc &= 0xffffff;
   //no re-entrancy guard needed: cpu_execute_opcode() calls dispatch() directly, never CPU::main().

@@ -300,6 +300,7 @@ public:
     //background.cpp
     auto renderBackground(PPU::IO::Background&, uint8 source) -> void;
     auto getTile(PPU::IO::Background&, uint hoffset, uint voffset) -> uint;
+    auto getTileAddress(PPU::IO::Background&, uint hoffset, uint voffset) -> uint;
 
     //mode7.cpp
     auto renderMode7(PPU::IO::Background&, uint8 source) -> void;
