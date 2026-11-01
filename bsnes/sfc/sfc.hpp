@@ -24,6 +24,10 @@ namespace SuperFamicom {
   auto libretroExtCpuExecute(uint32_t pc) -> void;
   auto libretroExtCpuRead(uint32_t pc, uint32_t address, uint8_t value) -> uint8_t;
   auto libretroExtCpuWrite(uint32_t pc, uint32_t address, uint8_t value) -> void;
+  //execution traps: checked at instruction boundaries (after interrupt dispatch).
+  //returns true when the frontend handled the instruction and it must not execute.
+  extern bool libretroExtExecTrapsActive;
+  auto libretroExtExecTrap(uint32_t pc) -> bool;
 #endif
   #define platform Emulator::platform
   namespace File = Emulator::File;

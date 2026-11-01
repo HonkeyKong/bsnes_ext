@@ -60,6 +60,27 @@ struct libretro_ext_static_region_info {
 };
 struct libretro_ext_share_info { char share_tag[LIBRETRO_EXT_SHARE_TAG_LEN]; uint64_t size; uint32_t flags; };
 
+// Execution traps (optional v5 tail fields).
+//
+// A trap fires synchronously at an instruction boundary when the CPU is about to fetch an
+// opcode from a registered address (exact 24-bit bus address; register mirrors separately).
+// Interrupts are dispatched before the check, so a trap never pre-empts an NMI/IRQ.
+//
+// The callback runs on the emulated CPU's cothread (bsnes: 32 KiB stack). Inside it the
+// frontend may use the register and memory APIs, and cpu_execute_opcode() to run one
+// instruction with a substitute opcode. Keep it short and non-blocking; queue heavy work.
+// It is re-invoked whenever emulation re-executes that address (run-ahead, rewind,
+// state loads), so handlers must be a pure function of emulated state.
+// bsnes run-ahead snapshots raw cothread stacks: a frame can end while the CPU is suspended
+// inside a callback (e.g. within cpu_execute_opcode), and restoring that snapshot resumes the
+// callback mid-body with its saved locals. Frontend-side state mutated by a handler must
+// therefore be snapshotted alongside core state, or derived purely from emulated memory.
+enum libretro_ext_trap_result : uint32_t {
+  LIBRETRO_EXT_TRAP_CONTINUE = 0, // execute the instruction at the (possibly updated) PC normally
+  LIBRETRO_EXT_TRAP_HANDLED = 1,  // instruction step is complete; resume at the current PC
+};
+typedef uint32_t (*libretro_ext_exec_trap_cb)(void* user, const char* cpu_tag, uint64_t address, uint8_t opcode);
+
 struct libretro_ext_api {
   uint32_t abi_version;
   uint32_t sizeof_struct;
@@ -121,6 +142,14 @@ struct libretro_ext_api {
   uint32_t (*get_rollback_preferred_delta_block_size)();
   uint64_t (*rollback_build_delta)(const void*, const void*, uint64_t, void*, uint64_t);
   bool (*rollback_apply_delta)(void*, uint64_t, const void*, uint64_t);
+  // --- execution traps (tail; gate on sizeof_struct) ---
+  void (*set_exec_trap_callback)(libretro_ext_exec_trap_cb, void* user);
+  bool (*add_exec_trap)(const char* cpu_tag, uint64_t address);
+  bool (*remove_exec_trap)(const char* cpu_tag, uint64_t address);
+  void (*clear_exec_traps)();
+  // Only valid inside a trap callback: performs a real opcode fetch cycle at PC, then executes
+  // `opcode` in place of the fetched byte (e.g. the instruction displaced by a WDM patch).
+  bool (*cpu_execute_opcode)(const char* cpu_tag, uint8_t opcode);
 };
 
 LIBRETRO_EXT_EXPORT const libretro_ext_api* libretro_ext_get_api(void);

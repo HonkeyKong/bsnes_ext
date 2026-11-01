@@ -185,6 +185,38 @@ bool writeRegister(const char* tag, const char* name, uint64_t value) {
   return true;
 }
 
+// --- execution traps ---------------------------------------------------------------
+// Sparse 24-bit address bitset (2 MiB, allocated on first use) so the per-instruction cost
+// with traps registered is one bit test, and zero (a bool test) with none registered.
+std::vector<uint64_t> trapBits;
+uint32_t trapCount = 0;
+libretro_ext_exec_trap_cb trapCallback = nullptr;
+void* trapUser = nullptr;
+
+void updateTrapsActive() { SuperFamicom::libretroExtExecTrapsActive = trapCount && trapCallback; }
+void setExecTrapCallback(libretro_ext_exec_trap_cb cb, void* user) { trapCallback = cb; trapUser = user; updateTrapsActive(); }
+bool addExecTrap(const char* tag, uint64_t address) {
+  if(!validCpu(tag) || address > 0xffffff) return false;
+  if(trapBits.empty()) trapBits.assign((1u << 24) / 64, 0);
+  uint64_t& word = trapBits[address >> 6]; const uint64_t bit = 1ull << (address & 63);
+  if(!(word & bit)) { word |= bit; trapCount++; }
+  updateTrapsActive(); return true;
+}
+bool removeExecTrap(const char* tag, uint64_t address) {
+  if(!validCpu(tag) || address > 0xffffff || trapBits.empty()) return false;
+  uint64_t& word = trapBits[address >> 6]; const uint64_t bit = 1ull << (address & 63);
+  if(!(word & bit)) return false;
+  word &= ~bit; trapCount--; updateTrapsActive(); return true;
+}
+void clearExecTraps() { trapBits.clear(); trapBits.shrink_to_fit(); trapCount = 0; updateTrapsActive(); }
+bool cpuExecuteOpcode(const char* tag, uint8_t opcode) {
+  //only legal on the CPU cothread, i.e. from inside a trap callback. deliberately not a flag:
+  //bsnes state loads recreate (synchronized) or rewind (stack-serialized) the cothread, which
+  //would leave a frontend-side flag stale.
+  if(!validCpu(tag) || !SuperFamicom::cpu.active()) return false;
+  SuperFamicom::cpu.executeOpcode(opcode); return true;
+}
+
 const libretro_ext_api extApi = [] {
   libretro_ext_api table{};
   table.abi_version = 5; table.sizeof_struct = sizeof table;
@@ -202,18 +234,30 @@ const libretro_ext_api extApi = [] {
   table.write_cpu_state_u64_by_index = writeState; table.write_cpu_state_u64_by_tag = writeStateTag;
   table.write_cpu_register_by_tag = writeRegister; table.add_inject_rule = addInjectRule;
   table.clear_inject_rules = clearInjectRules; table.add_inject_rule_ex = addInjectRuleEx;
+  table.set_exec_trap_callback = setExecTrapCallback; table.add_exec_trap = addExecTrap;
+  table.remove_exec_trap = removeExecTrap; table.clear_exec_traps = clearExecTraps;
+  table.cpu_execute_opcode = cpuExecuteOpcode;
   return table;
 }();
 
 }
 
 void libretro_ext_reset() {
-  frameNumber = 0; clearWatchRules(); clearInjectRules(); clearLastWatchHit();
+  frameNumber = 0; clearWatchRules(); clearInjectRules(); clearLastWatchHit(); clearExecTraps();
   pcHistoryHead = pcHistoryCount = 0; std::memset(pcHistory, 0, sizeof pcHistory);
 }
 void libretro_ext_frame_complete() { if(loaded()) frameNumber++; }
 
 namespace SuperFamicom {
+bool libretroExtExecTrapsActive = false;
+auto libretroExtExecTrap(uint32_t pc) -> bool {
+  pc &= 0xffffff;
+  //no re-entrancy guard needed: cpu_execute_opcode() calls dispatch() directly, never CPU::main().
+  if(!(trapBits[pc >> 6] >> (pc & 63) & 1) || !loaded()) return false;
+  const uint8_t opcode = bus.read(pc, cpu.r.mdr);  //ROM/WRAM peek; traps are not meant for MMIO
+  const uint32_t result = trapCallback(trapUser, CpuTag, pc, opcode);
+  return result == LIBRETRO_EXT_TRAP_HANDLED;
+}
 auto libretroExtCpuExecute(uint32_t pc) -> void {
   if(!debugEnabled || !loaded()) return;
   pcHistory[pcHistoryHead] = pc; pcHistoryHead = (pcHistoryHead + 1) & 255;

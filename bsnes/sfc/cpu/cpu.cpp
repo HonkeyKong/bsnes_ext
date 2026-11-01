@@ -37,7 +37,12 @@ auto CPU::main() -> void {
 #endif
   if(r.wai) return instructionWait();
   if(r.stp) return instructionStop();
-  if(!status.interruptPending) return instruction();
+  if(!status.interruptPending) {
+#if defined(__LIBRETRO__)
+    if(libretroExtExecTrapsActive && libretroExtExecTrap(r.pc.d)) return;
+#endif
+    return instruction();
+  }
 
   if(status.nmiPending) {
     status.nmiPending = 0;

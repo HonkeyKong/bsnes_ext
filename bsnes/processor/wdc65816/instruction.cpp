@@ -18,6 +18,17 @@ L PC.h = read(r.vector + 1);
 //rather than implement four instruction tables for all possible combinations of these bits,
 //instead use macro abuse to generate all four tables based off of a single template table.
 auto WDC65816::instruction() -> void {
+  return dispatch(fetch());
+}
+
+//performs a genuine opcode-fetch bus cycle at PC (preserving timing), then executes `opcode`
+//instead of the fetched byte. used by frontend execution traps to run a displaced instruction.
+auto WDC65816::executeOpcode(uint8 opcode) -> void {
+  fetch();
+  return dispatch(opcode);
+}
+
+auto WDC65816::dispatch(uint8 opcode) -> void {
   //a = instructions unaffected by M/X flags
   //m = instructions affected by M flag (1 = 8-bit; 0 = 16-bit)
   //x = instructions affected by X flag (1 = 8-bit; 0 = 16-bit)

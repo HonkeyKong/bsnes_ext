@@ -224,6 +224,8 @@ struct WDC65816 {
 
   //instruction.cpp
   auto instruction() -> void;
+  auto executeOpcode(uint8 opcode) -> void;
+  auto dispatch(uint8 opcode) -> void;
 
   //serialization.cpp
   auto serialize(serializer&) -> void;
